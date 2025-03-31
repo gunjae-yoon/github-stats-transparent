@@ -2,11 +2,14 @@
 
 import asyncio
 import os
+import json
+from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
 import aiohttp
 import requests
 
+CACHE_FILE = "contribution_cache.json"
 
 ###############################################################################
 # Main Classes
@@ -72,7 +75,6 @@ class Queries(object):
                                                headers=headers,
                                                params=tuple(params.items()))
                 if r.status == 202:
-                    # print(f"{path} returned 202. Retrying...")
                     print(f"A path returned 202. Retrying...")
                     await asyncio.sleep(2)
                     continue
@@ -93,7 +95,6 @@ class Queries(object):
                         continue
                     elif r.status_code == 200:
                         return r.json()
-        # print(f"There were too many 202s. Data for {path} will be incomplete.")
         print("There were too many 202s. Data for this repository will be incomplete.")
         return dict()
 
@@ -224,7 +225,6 @@ query {{
 }}
 """
 
-
 class Stats(object):
     """
     Retrieve and store statistics about GitHub usage.
@@ -247,7 +247,22 @@ class Stats(object):
         self._languages = None
         self._repos = None
         self._lines_changed = None
-        self._views = None        
+        self._views = None
+        self._ignored_repos = None
+
+    # 캐시 로드 함수
+    def _load_cache(self) -> Dict:
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"repositories": {}}
+
+    # 캐시 저장 함수
+    def _save_cache(self, cache: Dict) -> None:
+        # 루트 디렉토리에 저장하므로 디렉토리 생성 로직 제거
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(cache, f, indent=2)
 
     async def to_str(self) -> str:
         """
@@ -351,8 +366,6 @@ Languages:
             else:
                 break
 
-        # TODO: Improve languages to scale by number of contributions to
-        #       specific filetypes
         langs_total = sum([v.get("size", 0) for v in self._languages.values()])
         for k, v in self._languages.items():
             v["prop"] = 100 * (v.get("size", 0) / langs_total)
@@ -466,22 +479,55 @@ Languages:
         """
         if self._lines_changed is not None:
             return self._lines_changed
+
         additions = 0
         deletions = 0
+        cache = self._load_cache()
+        updated_cache = cache["repositories"].copy()
+
         for repo in await self.all_repos:
             r = await self.queries.query_rest(f"/repos/{repo}/stats/contributors")
-            for author_obj in r:
-                # Handle malformed response from the API by skipping this repo
-                if (not isinstance(author_obj, dict)
-                        or not isinstance(author_obj.get("author", {}), dict)):
-                    continue
-                author = author_obj.get("author", {}).get("login", "")
-                if author != self.username:
-                    continue
+            repo_additions = 0
+            repo_deletions = 0
+            success = False
 
-                for week in author_obj.get("weeks", []):
-                    additions += week.get("a", 0)
-                    deletions += week.get("d", 0)
+            # API 호출 성공 시
+            if isinstance(r, list):  # 정상적인 응답은 리스트 형태
+                for author_obj in r:
+                    if not isinstance(author_obj, dict) or not isinstance(author_obj.get("author", {}), dict):
+                        continue
+                    author = author_obj.get("author", {}).get("login", "")
+                    if author != self.username:
+                        continue
+                    for week in author_obj.get("weeks", []):
+                        repo_additions += week.get("a", 0)
+                        repo_deletions += week.get("d", 0)
+                success = True
+            else:
+                print(f"Failed to fetch contributions for {repo}. Using cache if available.")
+
+            if success:
+                # 성공 시 캐시 업데이트 (datetime 사용)
+                updated_cache[repo] = {
+                    "additions": repo_additions,
+                    "deletions": repo_deletions,
+                    "last_updated": datetime.utcnow().isoformat() + "Z"
+                }
+                additions += repo_additions
+                deletions += repo_deletions
+            elif repo in cache["repositories"]:
+                # 실패 시 캐시 데이터 사용
+                cached_data = cache["repositories"][repo]
+                additions += cached_data["additions"]
+                deletions += cached_data["deletions"]
+                updated_cache[repo] = cached_data
+                print(f"Using cached data for {repo}")
+            else:
+                print(f"No cache available for {repo}. Skipping.")
+
+        # 캐시 저장
+        cache["repositories"] = updated_cache
+        self._save_cache(cache)
 
         self._lines_changed = (additions, deletions)
         return self._lines_changed
@@ -504,7 +550,6 @@ Languages:
         self._views = total
         return total
 
-
 ###############################################################################
 # Main Function
 ###############################################################################
@@ -518,7 +563,6 @@ async def main() -> None:
     async with aiohttp.ClientSession() as session:
         s = Stats(user, access_token, session)
         print(await s.to_str())
-
 
 if __name__ == "__main__":
     asyncio.run(main())
