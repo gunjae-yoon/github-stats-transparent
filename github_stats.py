@@ -16,11 +16,6 @@ CACHE_FILE = "contribution_cache.json"
 ###############################################################################
 
 class Queries(object):
-    """
-    Class with functions to query the GitHub GraphQL (v4) API and the REST (v3)
-    API. Also includes functions to dynamically generate GraphQL queries.
-    """
-
     def __init__(self, username: str, access_token: str,
                  session: aiohttp.ClientSession, max_connections: int = 10):
         self.username = username
@@ -29,15 +24,7 @@ class Queries(object):
         self.semaphore = asyncio.Semaphore(max_connections)
 
     async def query(self, generated_query: str) -> Dict:
-        """
-        Make a request to the GraphQL API using the authentication token from
-        the environment
-        :param generated_query: string query to be sent to the API
-        :return: decoded GraphQL JSON output
-        """
-        headers = {
-            "Authorization": f"Bearer {self.access_token}",
-        }
+        headers = {"Authorization": f"Bearer {self.access_token}"}
         try:
             async with self.semaphore:
                 r = await self.session.post("https://api.github.com/graphql",
@@ -46,7 +33,6 @@ class Queries(object):
             return await r.json()
         except:
             print("aiohttp failed for GraphQL query")
-            # Fall back on non-async requests
             async with self.semaphore:
                 r = requests.post("https://api.github.com/graphql",
                                   headers=headers,
@@ -54,17 +40,8 @@ class Queries(object):
                 return r.json()
 
     async def query_rest(self, path: str, params: Optional[Dict] = None) -> Dict:
-        """
-        Make a request to the REST API
-        :param path: API path to query
-        :param params: Query parameters to be passed to the API
-        :return: deserialized REST JSON output
-        """
-
         for _ in range(60):
-            headers = {
-                "Authorization": f"token {self.access_token}",
-            }
+            headers = {"Authorization": f"token {self.access_token}"}
             if params is None:
                 params = dict()
             if path.startswith("/"):
@@ -78,13 +55,11 @@ class Queries(object):
                     print(f"A path returned 202. Retrying...")
                     await asyncio.sleep(2)
                     continue
-
                 result = await r.json()
                 if result is not None:
                     return result
             except:
                 print("aiohttp failed for rest query")
-                # Fall back on non-async requests
                 async with self.semaphore:
                     r = requests.get(f"https://api.github.com/{path}",
                                      headers=headers,
@@ -101,88 +76,48 @@ class Queries(object):
     @staticmethod
     def repos_overview(contrib_cursor: Optional[str] = None,
                        owned_cursor: Optional[str] = None) -> str:
-        """
-        :return: GraphQL query with overview of user repositories
-        """
         return f"""{{
   viewer {{
     login,
     name,
     repositories(
         first: 100,
-        orderBy: {{
-            field: UPDATED_AT,
-            direction: DESC
-        }},
+        orderBy: {{field: UPDATED_AT, direction: DESC}},
         isFork: false,
         after: {"null" if owned_cursor is None else '"'+ owned_cursor +'"'}
     ) {{
-      pageInfo {{
-        hasNextPage
-        endCursor
-      }}
+      pageInfo {{hasNextPage endCursor}}
       nodes {{
         nameWithOwner
-        stargazers {{
-          totalCount
-        }}
+        stargazers {{totalCount}}
         forkCount
         languages(first: 10, orderBy: {{field: SIZE, direction: DESC}}) {{
-          edges {{
-            size
-            node {{
-              name
-              color
-            }}
-          }}
+          edges {{size node {{name color}}}}
         }}
       }}
     }}
     repositoriesContributedTo(
         first: 100,
         includeUserRepositories: false,
-        orderBy: {{
-            field: UPDATED_AT,
-            direction: DESC
-        }},
-        contributionTypes: [
-            COMMIT,
-            PULL_REQUEST,
-            REPOSITORY,
-            PULL_REQUEST_REVIEW
-        ]
+        orderBy: {{field: UPDATED_AT, direction: DESC}},
+        contributionTypes: [COMMIT, PULL_REQUEST, REPOSITORY, PULL_REQUEST_REVIEW],
         after: {"null" if contrib_cursor is None else '"'+ contrib_cursor +'"'}
     ) {{
-      pageInfo {{
-        hasNextPage
-        endCursor
-      }}
+      pageInfo {{hasNextPage endCursor}}
       nodes {{
         nameWithOwner
-        stargazers {{
-          totalCount
-        }}
+        stargazers {{totalCount}}
         forkCount
         languages(first: 10, orderBy: {{field: SIZE, direction: DESC}}) {{
-          edges {{
-            size
-            node {{
-              name
-              color
-            }}
-          }}
+          edges {{size node {{name color}}}}
         }}
       }}
     }}
   }}
-}}
-"""
+}}"""
 
     @staticmethod
     def contrib_years() -> str:
-        """
-        :return: GraphQL query to get all years the user has been a contributor
-        """
         return """
 query {
   viewer {
@@ -195,10 +130,6 @@ query {
 
     @staticmethod
     def contribs_by_year(year: str) -> str:
-        """
-        :param year: year to query for
-        :return: portion of a GraphQL query with desired info for a given year
-        """
         return f"""
     year{year}: contributionsCollection(
         from: "{year}-01-01T00:00:00Z",
@@ -212,10 +143,6 @@ query {
 
     @classmethod
     def all_contribs(cls, years: List[str]) -> str:
-        """
-        :param years: list of years to get contributions for
-        :return: query to retrieve contribution information for all user years
-        """
         by_years = "\n".join(map(cls.contribs_by_year, years))
         return f"""
 query {{
@@ -226,9 +153,6 @@ query {{
 """
 
 class Stats(object):
-    """
-    Retrieve and store statistics about GitHub usage.
-    """
     def __init__(self, username: str, access_token: str,
                  session: aiohttp.ClientSession,
                  exclude_repos: Optional[Set] = None,
@@ -249,8 +173,8 @@ class Stats(object):
         self._lines_changed = None
         self._views = None
         self._ignored_repos = None
+        self._repo_language_data = {}
 
-    # 캐시 로드 함수
     def _load_cache(self) -> Dict:
         try:
             with open(CACHE_FILE, 'r') as f:
@@ -258,20 +182,13 @@ class Stats(object):
         except (FileNotFoundError, json.JSONDecodeError):
             return {"repositories": {}}
 
-    # 캐시 저장 함수
     def _save_cache(self, cache: Dict) -> None:
-        # 루트 디렉토리에 저장하므로 디렉토리 생성 로직 제거
         with open(CACHE_FILE, 'w') as f:
             json.dump(cache, f, indent=2)
 
     async def to_str(self) -> str:
-        """
-        :return: summary of all available statistics
-        """
         languages = await self.languages_proportional
-        formatted_languages = "\n  - ".join(
-            [f"{k}: {v:0.4f}%" for k, v in languages.items()]
-        )
+        formatted_languages = "\n  - ".join([f"{k}: {v:0.4f}%" for k, v in languages.items()])
         lines_changed = await self.lines_changed
         return f"""Name: {await self.name}
 Stargazers: {await self.stargazers:,}
@@ -286,42 +203,27 @@ Languages:
   - {formatted_languages}"""
 
     async def get_stats(self) -> None:
-        """
-        Get lots of summary statistics using one big query. Sets many attributes
-        """
         self._stargazers = 0
         self._forks = 0
         self._languages = dict()
         self._repos = set()
         self._ignored_repos = set()
+        self._repo_language_data = {}
         
         next_owned = None
         next_contrib = None
         while True:
             raw_results = await self.queries.query(
-                Queries.repos_overview(owned_cursor=next_owned,
-                                       contrib_cursor=next_contrib)
+                Queries.repos_overview(owned_cursor=next_owned, contrib_cursor=next_contrib)
             )
             raw_results = raw_results if raw_results is not None else {}
 
-            self._name = (raw_results
-                          .get("data", {})
-                          .get("viewer", {})
-                          .get("name", None))
+            self._name = raw_results.get("data", {}).get("viewer", {}).get("name", None)
             if self._name is None:
-                self._name = (raw_results
-                              .get("data", {})
-                              .get("viewer", {})
-                              .get("login", "No Name"))
+                self._name = raw_results.get("data", {}).get("viewer", {}).get("login", "No Name")
 
-            contrib_repos = (raw_results
-                             .get("data", {})
-                             .get("viewer", {})
-                             .get("repositoriesContributedTo", {}))
-            owned_repos = (raw_results
-                           .get("data", {})
-                           .get("viewer", {})
-                           .get("repositories", {}))
+            contrib_repos = raw_results.get("data", {}).get("viewer", {}).get("repositoriesContributedTo", {})
+            owned_repos = raw_results.get("data", {}).get("viewer", {}).get("repositories", {})
             
             repos = owned_repos.get("nodes", [])
             if self._consider_forked_repos:
@@ -341,15 +243,28 @@ Languages:
                 self._stargazers += repo.get("stargazers").get("totalCount", 0)
                 self._forks += repo.get("forkCount", 0)
 
+                repo_langs = {}
+                total_size = 0
                 for lang in repo.get("languages", {}).get("edges", []):
-                    name = lang.get("node", {}).get("name", "Other")
-                    languages = await self.languages
-                    if name in self._exclude_langs: continue
-                    if name in languages:
-                        languages[name]["size"] += lang.get("size", 0)
-                        languages[name]["occurrences"] += 1
+                    lang_name = lang.get("node", {}).get("name", "Other")
+                    size = lang.get("size", 0)
+                    if lang_name in self._exclude_langs:
+                        continue
+                    repo_langs[lang_name] = size
+                    total_size += size
+                
+                if total_size > 0:
+                    self._repo_language_data[name] = {lang: size / total_size for lang, size in repo_langs.items()}
+
+                for lang in repo.get("languages", {}).get("edges", []):
+                    lang_name = lang.get("node", {}).get("name", "Other")
+                    if lang_name in self._exclude_langs:
+                        continue
+                    if lang_name in self._languages:
+                        self._languages[lang_name]["size"] += lang.get("size", 0)
+                        self._languages[lang_name]["occurrences"] += 1
                     else:
-                        languages[name] = {
+                        self._languages[lang_name] = {
                             "size": lang.get("size", 0),
                             "occurrences": 1,
                             "color": lang.get("node", {}).get("color")
@@ -357,12 +272,8 @@ Languages:
 
             if owned_repos.get("pageInfo", {}).get("hasNextPage", False) or \
                     contrib_repos.get("pageInfo", {}).get("hasNextPage", False):
-                next_owned = (owned_repos
-                              .get("pageInfo", {})
-                              .get("endCursor", next_owned))
-                next_contrib = (contrib_repos
-                                .get("pageInfo", {})
-                                .get("endCursor", next_contrib))
+                next_owned = owned_repos.get("pageInfo", {}).get("endCursor", next_owned)
+                next_contrib = contrib_repos.get("pageInfo", {}).get("endCursor", next_contrib)
             else:
                 break
 
@@ -372,9 +283,6 @@ Languages:
 
     @property
     async def name(self) -> str:
-        """
-        :return: GitHub user's name (e.g., Jacob Strieb)
-        """
         if self._name is not None:
             return self._name
         await self.get_stats()
@@ -383,9 +291,6 @@ Languages:
 
     @property
     async def stargazers(self) -> int:
-        """
-        :return: total number of stargazers on user's repos
-        """
         if self._stargazers is not None:
             return self._stargazers
         await self.get_stats()
@@ -394,9 +299,6 @@ Languages:
 
     @property
     async def forks(self) -> int:
-        """
-        :return: total number of forks on user's repos
-        """
         if self._forks is not None:
             return self._forks
         await self.get_stats()
@@ -405,9 +307,6 @@ Languages:
 
     @property
     async def languages(self) -> Dict:
-        """
-        :return: summary of languages used by the user
-        """
         if self._languages is not None:
             return self._languages
         await self.get_stats()
@@ -416,20 +315,13 @@ Languages:
 
     @property
     async def languages_proportional(self) -> Dict:
-        """
-        :return: summary of languages used by the user, with proportional usage
-        """
         if self._languages is None:
             await self.get_stats()
             assert(self._languages is not None)
-
         return {k: v.get("prop", 0) for (k, v) in self._languages.items()}
 
     @property
     async def repos(self) -> List[str]:
-        """
-        :return: list of names of user's repos
-        """
         if self._repos is not None:
             return self._repos
         await self.get_stats()
@@ -438,10 +330,6 @@ Languages:
     
     @property
     async def all_repos(self) -> List[str]:
-        """
-        :return: list of names of user's repos with contributed repos included
-                irrespective of whether the ignore flag is set or not
-        """
         if self._repos is not None and self._ignored_repos is not None:
             return self._repos | self._ignored_repos
         await self.get_stats()
@@ -451,25 +339,15 @@ Languages:
 
     @property
     async def total_contributions(self) -> int:
-        """
-        :return: count of user's total contributions as defined by GitHub
-        """
         if self._total_contributions is not None:
             return self._total_contributions
-
         self._total_contributions = 0
         years = (await self.queries.query(Queries.contrib_years())) \
-            .get("data", {}) \
-            .get("viewer", {}) \
-            .get("contributionsCollection", {}) \
-            .get("contributionYears", [])
+            .get("data", {}).get("viewer", {}).get("contributionsCollection", {}).get("contributionYears", [])
         by_year = (await self.queries.query(Queries.all_contribs(years))) \
-            .get("data", {}) \
-            .get("viewer", {}).values()
+            .get("data", {}).get("viewer", {}).values()
         for year in by_year:
-            self._total_contributions += year \
-                .get("contributionCalendar", {}) \
-                .get("totalContributions", 0)
+            self._total_contributions += year.get("contributionCalendar", {}).get("totalContributions", 0)
         return self._total_contributions
 
     @property
@@ -485,14 +363,15 @@ Languages:
         cache = self._load_cache()
         updated_cache = cache["repositories"].copy()
 
+        await self.get_stats()
+
         for repo in await self.all_repos:
             r = await self.queries.query_rest(f"/repos/{repo}/stats/contributors")
             repo_additions = 0
             repo_deletions = 0
             success = False
 
-            # API 호출 성공 시
-            if isinstance(r, list):  # 정상적인 응답은 리스트 형태
+            if isinstance(r, list):
                 for author_obj in r:
                     if not isinstance(author_obj, dict) or not isinstance(author_obj.get("author", {}), dict):
                         continue
@@ -507,16 +386,28 @@ Languages:
                 print(f"Failed to fetch contributions for {repo}. Using cache if available.")
 
             if success:
-                # 성공 시 캐시 업데이트 (datetime 사용)
+                lang_contribs = {}
+                if repo in self._repo_language_data:
+                    for lang, prop in self._repo_language_data[repo].items():
+                        lang_contribs[lang] = {
+                            "additions": int(repo_additions * prop),
+                            "deletions": int(repo_deletions * prop)
+                        }
+                else:
+                    lang_contribs["Unknown"] = {
+                        "additions": repo_additions,
+                        "deletions": repo_deletions
+                    }
+
                 updated_cache[repo] = {
                     "additions": repo_additions,
                     "deletions": repo_deletions,
-                    "last_updated": datetime.utcnow().isoformat() + "Z"
+                    "last_updated": datetime.utcnow().isoformat() + "Z",
+                    "languages": lang_contribs
                 }
                 additions += repo_additions
                 deletions += repo_deletions
             elif repo in cache["repositories"]:
-                # 실패 시 캐시 데이터 사용
                 cached_data = cache["repositories"][repo]
                 additions += cached_data["additions"]
                 deletions += cached_data["deletions"]
@@ -525,7 +416,6 @@ Languages:
             else:
                 print(f"No cache available for {repo}. Skipping.")
 
-        # 캐시 저장
         cache["repositories"] = updated_cache
         self._save_cache(cache)
 
@@ -534,19 +424,13 @@ Languages:
 
     @property
     async def views(self) -> int:
-        """
-        Note: only returns views for the last 14 days (as-per GitHub API)
-        :return: total number of page views the user's projects have received
-        """
         if self._views is not None:
             return self._views
-
         total = 0
         for repo in await self.repos:
             r = await self.queries.query_rest(f"/repos/{repo}/traffic/views")
             for view in r.get("views", []):
                 total += view.get("count", 0)
-
         self._views = total
         return total
 
@@ -555,9 +439,6 @@ Languages:
 ###############################################################################
 
 async def main() -> None:
-    """
-    Used mostly for testing; this module is not usually run standalone
-    """
     access_token = os.getenv("ACCESS_TOKEN")
     user = os.getenv("GITHUB_ACTOR")
     async with aiohttp.ClientSession() as session:
